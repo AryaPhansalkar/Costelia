@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getGCPComputePrice } from "@/lib/gcpPricing";
 
 interface PricingResponse {
   aws: {
@@ -30,7 +31,7 @@ export async function GET(request: NextRequest) {
 
   switch (serviceType) {
     case 'compute':
-      pricingData = getComputePricing(instanceType, region);
+      pricingData = await getComputePricing(instanceType, region);
       break;
     case 'storage':
       pricingData = getStoragePricing(storageSize, region);
@@ -39,38 +40,42 @@ export async function GET(request: NextRequest) {
       pricingData = getDatabasePricing(databaseType, region);
       break;
     default:
-      pricingData = getComputePricing(instanceType, region);
+      pricingData = await getComputePricing(instanceType, region);
   }
 
   return NextResponse.json(pricingData);
 }
 
-function getComputePricing(instanceType: string, region: string): PricingResponse {
-  const basePrices: Record<string, { aws: number; azure: number; gcp: number }> = {
-    't3.small': { aws: 0.0208, azure: 0.0228, gcp: 0.0190 },
-    't3.medium': { aws: 0.0416, azure: 0.0456, gcp: 0.0380 },
-    't3.large': { aws: 0.0832, azure: 0.0912, gcp: 0.0760 },
-    'm5.xlarge': { aws: 0.192, azure: 0.210, gcp: 0.185 },
+
+async function getComputePricing(instanceType: string, region: string): Promise<PricingResponse> {
+  const basePrices = {
+    't3.small': { aws: 0.0208, azure: 0.0228 },
+    't3.medium': { aws: 0.0416, azure: 0.0456 },
+    't3.large': { aws: 0.0832, azure: 0.0912 },
+    'm5.xlarge': { aws: 0.192, azure: 0.210 },
   };
 
   const regionMultiplier = region.startsWith('us') ? 1.0 : 1.15;
-  const prices = basePrices[instanceType] || basePrices['t3.medium'];
+  const prices = basePrices[instanceType as keyof typeof basePrices] || basePrices['t3.medium'];
+
+  // ✅ REAL GCP PRICE
+  const gcpLivePrice = await getGCPComputePrice(instanceType, region);
 
   return {
     aws: {
       price: prices.aws * regionMultiplier,
       unit: 'hour',
-      details: `EC2 ${instanceType} instance in ${region}. On-demand pricing with no upfront commitment.`,
+      details: `EC2 ${instanceType} instance in ${region}`,
     },
     azure: {
       price: prices.azure * regionMultiplier,
       unit: 'hour',
-      details: `Virtual Machine equivalent to ${instanceType} in ${region}. Pay-as-you-go pricing.`,
+      details: `Azure VM equivalent of ${instanceType} in ${region}`,
     },
     gcp: {
-      price: prices.gcp * regionMultiplier,
+      price: (gcpLivePrice ?? -1) * regionMultiplier,
       unit: 'hour',
-      details: `Compute Engine instance comparable to ${instanceType} in ${region}. Standard pricing.`,
+      details: `Live GCP pricing (from SKU API)`,
     },
   };
 }
