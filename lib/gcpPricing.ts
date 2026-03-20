@@ -12,6 +12,27 @@ function mapToGCPRegion(region: string) {
   return map[region] || "us-central1";
 }
 
+// ✅ instance mapping
+const instanceMap: Record<string, { cpu: number; ram: number }> = {
+  "t3.small": { cpu: 2, ram: 2 },
+  "t3.medium": { cpu: 2, ram: 4 },
+  "t3.large": { cpu: 2, ram: 8 },
+  "m5.xlarge": { cpu: 4, ram: 16 },
+};
+
+// ✅ helper to extract price
+function extractPrice(sku: any) {
+  const priceInfo =
+    sku?.pricingInfo?.[0]?.pricingExpression?.tieredRates?.[0]?.unitPrice;
+
+  if (!priceInfo) return 0;
+
+  return (
+    Number(priceInfo.units || 0) +
+    Number(priceInfo.nanos || 0) / 1e9
+  );
+}
+
 export async function getGCPComputePrice(instanceType: string, region: string) {
   try {
     const auth = new google.auth.GoogleAuth({
@@ -43,29 +64,39 @@ export async function getGCPComputePrice(instanceType: string, region: string) {
     console.log("First SKU:", skus[0]);
 
     // ✅ FIX 2: better matching
-    const matched = skus.find((sku: any) =>
-  sku.category?.resourceFamily === "Compute" &&
-  sku.category?.resourceGroup === "CPU" && // ✅ CPU only
-  sku.category?.usageType === "OnDemand" &&
-  sku.serviceRegions?.includes(gcpRegion) &&
-  !sku.description?.toLowerCase().includes("sole tenancy") && // ❌ remove bad SKUs
-  !sku.description?.toLowerCase().includes("premium") // ❌ avoid weird pricing
-);
+     const cpuSku = skus.find((sku: any) =>
+      sku.category?.resourceFamily === "Compute" &&
+      sku.category?.resourceGroup === "CPU" &&
+      sku.category?.usageType === "OnDemand" &&
+      sku.serviceRegions?.includes(gcpRegion) &&
+      !sku.description?.toLowerCase().includes("sole tenancy")
+    );
 
-    console.log("Matched SKU:", matched);
+    // ✅ RAM SKU
+    const ramSku = skus.find((sku: any) =>
+      sku.category?.resourceFamily === "Compute" &&
+      sku.category?.resourceGroup === "RAM" &&
+      sku.category?.usageType === "OnDemand" &&
+      sku.serviceRegions?.includes(gcpRegion) &&
+      !sku.description?.toLowerCase().includes("sole tenancy")
+    );
 
-    if (!matched) return null;
+    console.log("CPU SKU:", cpuSku?.description);
+    console.log("RAM SKU:", ramSku?.description);
 
-    const priceInfo =
-      matched.pricingInfo?.[0]?.pricingExpression?.tieredRates?.[0]?.unitPrice;
+    const cpuPrice = extractPrice(cpuSku);
+    const ramPrice = extractPrice(ramSku);
 
-    if (!priceInfo) return null;
+    console.log("CPU Price:", cpuPrice);
+    console.log("RAM Price:", ramPrice);
 
-    const price =
-      Number(priceInfo.units || 0) +
-      Number(priceInfo.nanos || 0) / 1e9;
+    const instance = instanceMap[instanceType] || instanceMap["t3.medium"];
 
-    return price;
+    const totalPrice =
+      instance.cpu * cpuPrice +
+      instance.ram * ramPrice;
+    console.log(totalPrice)
+    return Number(totalPrice.toFixed(2));
   } catch (err) {
     console.error("GCP Pricing Error:", err);
     return null;
